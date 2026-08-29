@@ -1,0 +1,57 @@
+name: verify-fragmentation-estimates
+on:
+  push:
+    branches:
+      - chatgpt-public-data-transfer-20260829
+jobs:
+  estimate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download public-source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bis-source
+          run-id: 33277227956
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/bis_artifact
+      - uses: actions/download-artifact@v4
+        with:
+          name: cepii-source
+          run-id: 33277227956
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/cepii_artifact
+      - uses: actions/download-artifact@v4
+        with:
+          name: idealpoints-source
+          run-id: 33277227956
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/ideal_artifact
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python dependencies
+        run: pip install pandas numpy pycountry
+      - name: Clean and merge public data
+        run: python temp_analysis/build_common_public.py
+      - uses: r-lib/actions/setup-r@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::data.table
+            any::fixest
+      - name: Estimate in R/fixest
+        run: Rscript temp_analysis/estimate_fixest.R
+      - name: Upload estimates
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-estimates
+          path: |
+            analysis_work/common_matched.csv
+            analysis_work/*.json
+            analysis_work/*estimates.csv
+            analysis_work/*robustness.csv
+            analysis_work/model_*.txt
+            analysis_work/bank_diagnostics.json
+          retention-days: 1
