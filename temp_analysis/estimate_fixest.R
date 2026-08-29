@@ -4,32 +4,31 @@ library(fixest)
 d <- fread("analysis_work/common_matched.csv")
 setDT(d)
 
-sep_safe <- function(x) {
+sep_safe <- function(x, yvar = "bank_musd") {
   repeat {
     n0 <- nrow(x)
-    x <- x[, if (sum(bank_musd, na.rm=TRUE) > 0) .SD, by=pair_id]
-    x <- x[, if (sum(bank_musd, na.rm=TRUE) > 0) .SD, by=op_year]
-    x <- x[, if (sum(bank_musd, na.rm=TRUE) > 0) .SD, by=dp_year]
+    for (g in c("pair_id", "op_year", "dp_year")) {
+      keep <- x[, .(ysum = sum(get(yvar), na.rm = TRUE)), by = g][ysum > 0, get(g)]
+      x <- x[get(g) %in% keep]
+    }
     if (nrow(x) == n0) break
   }
   x
 }
+
 fit_pair <- function(x) {
-  x <- sep_safe(copy(x))
-  # Re-standardize the distance inside each comparison sample.
-  x[, ipd_win := (AbsIdealDiff - mean(AbsIdealDiff))/sd(AbsIdealDiff)]
-  fb <- fepois(bank_musd ~ ipd_win | pair_id + op_year + dp_year,
+  x <- sep_safe(copy(x), "bank_musd")
+  fb <- fepois(bank_musd ~ ipd_z | pair_id + op_year + dp_year,
                data=x, vcov=~undirected_pair, fixef.rm="perfect_fit", notes=FALSE)
-  ft <- fepois(trade_musd ~ ipd_win | pair_id + op_year + dp_year,
+  ft <- fepois(trade_musd ~ ipd_z | pair_id + op_year + dp_year,
                data=x, vcov=~undirected_pair, fixef.rm="perfect_fit", notes=FALSE)
   data.table(
-    beta_bank=coef(fb)[["ipd_win"]], se_bank=se(fb)[["ipd_win"]], n_bank=nobs(fb),
-    beta_trade=coef(ft)[["ipd_win"]], se_trade=se(ft)[["ipd_win"]], n_trade=nobs(ft),
+    beta_bank=coef(fb)[["ipd_z"]], se_bank=se(fb)[["ipd_z"]], n_bank=nobs(fb),
+    beta_trade=coef(ft)[["ipd_z"]], se_trade=se(ft)[["ipd_z"]], n_trade=nobs(ft),
     n_raw=nrow(x), pairs=uniqueN(x$pair_id), clusters=uniqueN(x$undirected_pair)
   )
 }
 
-# Full common-support estimate with global (matched-sample) standardization from Python.
 fb <- fepois(bank_musd ~ ipd_z | pair_id + op_year + dp_year,
              data=d, vcov=~undirected_pair, fixef.rm="perfect_fit", notes=FALSE)
 ft <- fepois(trade_musd ~ ipd_z | pair_id + op_year + dp_year,
@@ -43,23 +42,21 @@ main[, lo95_pct := 100*(exp(beta-1.96*se)-1)]
 main[, hi95_pct := 100*(exp(beta+1.96*se)-1)]
 fwrite(main,"analysis_work/main_estimates.csv")
 
-# Rolling ten-year windows, common support within each window.
 roll <- rbindlist(lapply(1987:2020,function(e) {
   x <- d[year >= e-9 & year <= e]
   if(nrow(x)<500) return(NULL)
   z <- tryCatch(fit_pair(x),error=function(err) NULL)
   if(is.null(z)) return(NULL)
-  z[, \`:=\`(start=e-9,end=e)]
+  z[, `:=`(start=e-9,end=e)]
   z
 }),fill=TRUE)
 for(v in c("bank","trade")) {
-  roll[, paste0("pct_",v) := 100*(exp(get(paste0("beta_",v)))-1)]
-  roll[, paste0("lo95_",v) := 100*(exp(get(paste0("beta_",v))-1.96*get(paste0("se_",v)))-1)]
-  roll[, paste0("hi95_",v) := 100*(exp(get(paste0("beta_",v))+1.96*get(paste0("se_",v)))-1)]
+  set(roll, j=paste0("pct_",v), value=100*(exp(roll[[paste0("beta_",v)]])-1))
+  set(roll, j=paste0("lo95_",v), value=100*(exp(roll[[paste0("beta_",v)]]-1.96*roll[[paste0("se_",v)]])-1))
+  set(roll, j=paste0("hi95_",v), value=100*(exp(roll[[paste0("beta_",v)]]+1.96*roll[[paste0("se_",v)]])-1))
 }
 fwrite(roll,"analysis_work/rolling_estimates.csv")
 
-# Economically meaningful eras.
 periods <- list(
   "1978-1989"=c(1978,1989),
   "1990-2001"=c(1990,2001),
@@ -72,27 +69,20 @@ per <- rbindlist(lapply(names(periods),function(nm) {
   if(nrow(x)<300) return(NULL)
   z <- tryCatch(fit_pair(x),error=function(err) NULL)
   if(is.null(z)) return(NULL)
-  z[, period:=nm]; z
+  z[, period:=nm]
+  z
 }),fill=TRUE)
-for(v in c("bank","trade")) per[, paste0("pct_",v) := 100*(exp(get(paste0("beta_",v)))-1)]
+for(v in c("bank","trade")) set(per, j=paste0("pct_",v), value=100*(exp(per[[paste0("beta_",v)]])-1))
 fwrite(per,"analysis_work/period_estimates.csv")
 
-# Mirroring robustness: only source-reported claims, same support if feasible.
 direct <- d[!is.na(reported_claim_musd)]
 if(nrow(direct)>500) {
   direct[, bank_direct := reported_claim_musd]
-  while(TRUE){
-    n0<-nrow(direct)
-    direct<-direct[,if(sum(bank_direct)>0).SD,by=pair_id]
-    direct<-direct[,if(sum(bank_direct)>0).SD,by=op_year]
-    direct<-direct[,if(sum(bank_direct)>0).SD,by=dp_year]
-    if(nrow(direct)==n0) break
-  }
-  direct[, ipd_direct := (AbsIdealDiff-mean(AbsIdealDiff))/sd(AbsIdealDiff)]
-  fd <- fepois(bank_direct ~ ipd_direct | pair_id + op_year + dp_year,
+  direct <- sep_safe(direct, "bank_direct")
+  fd <- fepois(bank_direct ~ ipd_z | pair_id + op_year + dp_year,
                data=direct,vcov=~undirected_pair,fixef.rm="perfect_fit",notes=FALSE)
-  rob <- data.table(spec="Reported claims only", beta=coef(fd)[["ipd_direct"]],
-                    se=se(fd)[["ipd_direct"]],nobs=nobs(fd))
+  rob <- data.table(spec="Reported claims only", beta=coef(fd)[["ipd_z"]],
+                    se=se(fd)[["ipd_z"]],nobs=nobs(fd))
   rob[,pct:=100*(exp(beta)-1)]
   fwrite(rob,"analysis_work/direct_robustness.csv")
 }
