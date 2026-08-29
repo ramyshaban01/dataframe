@@ -1,0 +1,90 @@
+name: public-data-transfer
+on:
+  push:
+    branches:
+      - chatgpt-public-data-transfer-20260829
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download public source archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public_data
+          CEPII_URL="https://www.cepii.fr/DATA_DOWNLOAD/gravity/data/Gravity_csv_V202211.zip"
+          BIS_URL="https://data.bis.org/static/bulk/WS_LBS_D_PUB_csv_flat.zip"
+          curl -fL --retry 6 --retry-delay 5 --connect-timeout 30 "$CEPII_URL" -o public_data/Gravity_csv_V202211.zip
+          curl -fL --retry 6 --retry-delay 5 --connect-timeout 30 "$BIS_URL" -o public_data/WS_LBS_D_PUB_csv_flat.zip
+
+          # Harvard Dataverse: Voeten, United Nations General Assembly Ideal Points
+          DOI="doi:10.7910/DVN/LEJUQZ"
+          curl -fL --retry 6 "https://dataverse.harvard.edu/api/datasets/:persistentId/?persistentId=$DOI" -o public_data/harvard_dataverse_metadata.json
+          python - <<'PY'
+          import json, urllib.request, pathlib, re
+          p=pathlib.Path("public_data")
+          meta=json.load(open(p/"harvard_dataverse_metadata.json"))
+          files=meta["data"]["latestVersion"]["files"]
+          wanted=[]
+          for f in files:
+              name=f["dataFile"]["filename"]
+              low=name.lower()
+              if ("ideal" in low and (low.endswith(".tab") or low.endswith(".csv") or low.endswith(".dta"))) or "codebook" in low:
+                  wanted.append((f["dataFile"]["id"], name))
+          print("Dataverse files selected:", wanted)
+          for fid,name in wanted:
+              safe=re.sub(r'[^A-Za-z0-9._-]+','_',name)
+              url=f"https://dataverse.harvard.edu/api/access/datafile/{fid}"
+              with urllib.request.urlopen(url, timeout=120) as r, open(p/safe,"wb") as out:
+                  out.write(r.read())
+          PY
+
+          cat > public_data/SOURCES.txt <<'EOF'
+          CEPII Gravity V202211:
+          https://www.cepii.fr/DATA_DOWNLOAD/gravity/data/Gravity_csv_V202211.zip
+          BIS Locational Banking Statistics, public flat CSV:
+          https://data.bis.org/static/bulk/WS_LBS_D_PUB_csv_flat.zip
+          Harvard Dataverse, Erik Voeten, United Nations General Assembly Ideal Points:
+          doi:10.7910/DVN/LEJUQZ
+          EOF
+          (cd public_data && sha256sum * > SHA256SUMS.txt)
+          du -h public_data/*
+          unzip -l public_data/Gravity_csv_V202211.zip | head -30 || true
+          unzip -l public_data/WS_LBS_D_PUB_csv_flat.zip | head -30 || true
+      - name: Upload CEPII source
+        uses: actions/upload-artifact@v4
+        with:
+          name: cepii-source
+          path: |
+            public_data/Gravity_csv_V202211.zip
+            public_data/SOURCES.txt
+            public_data/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 1
+      - name: Upload BIS source
+        uses: actions/upload-artifact@v4
+        with:
+          name: bis-source
+          path: |
+            public_data/WS_LBS_D_PUB_csv_flat.zip
+            public_data/SOURCES.txt
+            public_data/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 1
+      - name: Upload UN ideal-points source
+        uses: actions/upload-artifact@v4
+        with:
+          name: idealpoints-source
+          path: |
+            public_data/harvard_dataverse_metadata.json
+            public_data/*Ideal*
+            public_data/*ideal*
+            public_data/*Codebook*
+            public_data/*codebook*
+            public_data/SOURCES.txt
+            public_data/SHA256SUMS.txt
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 1
