@@ -22,7 +22,7 @@ prefix_template='Q: Quarterly,S: Amounts outstanding / Stocks,{pos},{instr},TO1:
 for pos in ["C: Total claims","L: Total liabilities"]:
     for instr in ["A: All instruments","G: Loans and deposits"]:
         p=prefix_template.format(pos=pos,instr=instr)
-        cmd=f'''LC_ALL=C rg -F {p!r} {str(bis_csv)!r} | LC_ALL=C rg ',N: Cross-border,(19|20)[0-9]{{2}}-Q4,' >> {str(target)!r} || true'''
+        cmd=f'''LC_ALL=C grep -F {p!r} {str(bis_csv)!r} | LC_ALL=C grep -E ',N: Cross-border,(19|20)[0-9]{{2}}-Q4,' >> {str(target)!r} || true'''
         subprocess.run(["bash","-lc",cmd],check=True)
 
 use=['L_POSITION:Balance sheet position','L_INSTR:Type of instruments','L_REP_CTY:Reporting country',
